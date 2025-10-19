@@ -16,7 +16,6 @@ from .models import (
     QueueRequest,
     EditMessageRequest,
 )
-from .orchestrator import ingest_and_queue
 from .services import storage
 
 
@@ -48,6 +47,11 @@ def health() -> HealthResponse:
 
 @app.post("/ingest", response_model=List[Notification])
 def ingest(req: IngestRequest) -> List[Notification]:
+    # Import lazily so production (without pandas) can still run
+    try:
+        from .orchestrator import ingest_and_queue  # type: ignore
+    except Exception:
+        raise HTTPException(status_code=503, detail="ingest not available in this deployment")
     try:
         return ingest_and_queue(req.dataPath)
     except Exception as e:
@@ -96,6 +100,8 @@ def mark_failed(req: DecisionRequest) -> dict:
     try:
         storage.update_notification_status(req.notificationId, "failed")
         return {"ok": True}
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e))
 
 
 @app.post("/edit-message", response_model=Notification)
@@ -109,8 +115,6 @@ def edit_message(req: EditMessageRequest) -> Notification:
             storage.save_notifications(notes)
             return updated
     raise HTTPException(status_code=404, detail="Notification not found")
-    except ValueError as e:
-        raise HTTPException(status_code=404, detail=str(e))
 
 
 @app.post("/queue", response_model=Notification)
