@@ -1,0 +1,15 @@
+.git
+.gitignore
+__pycache__
+.venv
+node_modules
+.aws-sam
+db
+data
+infra/pandas-layer/python
+*.pyc
+*.pyo
+*.pyd
+*.swp
+*.swo
+
