@@ -28,8 +28,18 @@ Globals:
       Variables:
         BEDROCK_MODEL_ID: !Ref BedrockModelId
         USE_BEDROCK: !Ref UseBedrock
+    Layers:
+      - !Ref PandasLayer
 
 Resources:
+  PandasLayer:
+    Type: AWS::Serverless::LayerVersion
+    Properties:
+      LayerName: !Sub ${AWS::StackName}-pandas
+      ContentUri: ../infra/pandas-layer/
+      CompatibleRuntimes:
+        - python3.10
+      RetentionPolicy: Delete
   ProgressBucket:
     Type: AWS::S3::Bucket
     Properties:
