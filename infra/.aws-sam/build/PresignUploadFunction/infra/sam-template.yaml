@@ -1,0 +1,247 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Transform: AWS::Serverless-2016-10-31
+Description: ACI Progress Agent - minimal SAM template (bucket, table, draft_message lambda)
+
+Parameters:
+  BucketName:
+    Type: String
+    Default: aci-progress-473316329834
+  TableName:
+    Type: String
+    Default: aci-agent-state
+  BedrockModelId:
+    Type: String
+    Default: us.anthropic.claude-sonnet-4-20250514-v1:0
+  UseBedrock:
+    Type: String
+    Default: 'true'
+  QueueApiBase:
+    Type: String
+    Default: https://REPLACE_WITH_API
+
+Globals:
+  Function:
+    Runtime: python3.10
+    Timeout: 30
+    MemorySize: 256
+    Environment:
+      Variables:
+        BEDROCK_MODEL_ID: !Ref BedrockModelId
+        USE_BEDROCK: !Ref UseBedrock
+
+Resources:
+  ProgressBucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      BucketName: !Ref BucketName
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+      CorsConfiguration:
+        CorsRules:
+          - AllowedOrigins: ['*']
+            AllowedMethods: ['GET', 'HEAD', 'PUT', 'POST']
+            AllowedHeaders: ['*']
+            MaxAge: 3000
+
+  AgentStateTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      TableName: !Ref TableName
+      BillingMode: PAY_PER_REQUEST
+      AttributeDefinitions:
+        - AttributeName: pk
+          AttributeType: S
+        - AttributeName: sk
+          AttributeType: S
+      KeySchema:
+        - AttributeName: pk
+          KeyType: HASH
+        - AttributeName: sk
+          KeyType: RANGE
+      SSESpecification:
+        SSEEnabled: true
+
+  DraftMessageFunctionRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: lambda.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
+      Policies:
+        - PolicyName: BedrockInvokeModel
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - bedrock:InvokeModel
+                Resource: '*'
+
+  DraftMessageFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: !Sub ${AWS::StackName}-draft-message
+      Handler: agentcore/tools/draft_message_lambda.handler
+      CodeUri: ../
+      Role: !GetAtt DraftMessageFunctionRole.Arn
+
+  ParseExcelFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: !Sub ${AWS::StackName}-parse-excel
+      Handler: agentcore/tools/parse_excel_lambda.handler
+      CodeUri: ../
+      Role: !GetAtt DraftMessageFunctionRole.Arn
+
+  ComputeDeltasFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: !Sub ${AWS::StackName}-compute-deltas
+      Handler: agentcore/tools/compute_deltas_lambda.handler
+      CodeUri: ../
+      Role: !GetAtt DraftMessageFunctionRole.Arn
+
+  OrchestratorFunctionRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: lambda.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
+      Policies:
+        - PolicyName: S3ReadList
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - s3:GetObject
+                  - s3:ListBucket
+                Resource:
+                  - !Sub arn:aws:s3:::${BucketName}
+                  - !Sub arn:aws:s3:::${BucketName}/*
+        - PolicyName: DynamoWrite
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - dynamodb:PutItem
+                  - dynamodb:UpdateItem
+                  - dynamodb:BatchWriteItem
+                  - dynamodb:Query
+                  - dynamodb:GetItem
+                Resource: !GetAtt AgentStateTable.Arn
+        - PolicyName: LambdaInvokeDraft
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - lambda:InvokeFunction
+                Resource: !GetAtt DraftMessageFunction.Arn
+
+  OrchestrateIngestFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: !Sub ${AWS::StackName}-orchestrate-ingest
+      Handler: agentcore/tools/orchestrate_ingest_lambda.handler
+      CodeUri: ../
+      Role: !GetAtt OrchestratorFunctionRole.Arn
+      Environment:
+        Variables:
+          BUCKET_NAME: !Ref BucketName
+          TABLE_NAME: !Ref TableName
+          QUEUE_API_BASE: !Ref QueueApiBase
+          AGENT_DRAFT_MESSAGE_LAMBDA_ARN: !GetAtt DraftMessageFunction.Arn
+      Events:
+        S3Upload:
+          Type: S3
+          Properties:
+            Bucket: !Ref ProgressBucket
+            Events: s3:ObjectCreated:*
+            Filter:
+              S3Key:
+                Rules:
+                  - Name: suffix
+                    Value: .xlsx
+
+  HttpApi:
+    Type: AWS::Serverless::HttpApi
+    Properties:
+      CorsConfiguration:
+        AllowOrigins:
+          - '*'
+        AllowMethods:
+          - GET
+          - POST
+          - PUT
+          - OPTIONS
+        AllowHeaders:
+          - '*'
+
+  PresignUploadFunctionRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: lambda.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
+      Policies:
+        - PolicyName: S3PutForPresign
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - s3:PutObject
+                Resource:
+                  - !Sub arn:aws:s3:::${BucketName}/*
+
+  PresignUploadFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: !Sub ${AWS::StackName}-presign-upload
+      Handler: agentcore/tools/presign_upload_lambda.handler
+      CodeUri: ../
+      Role: !GetAtt PresignUploadFunctionRole.Arn
+      Environment:
+        Variables:
+          BUCKET_NAME: !Ref BucketName
+      Events:
+        ApiEvent:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref HttpApi
+            Path: /presign
+            Method: POST
+
+Outputs:
+  BucketOut:
+    Value: !Ref ProgressBucket
+  TableOut:
+    Value: !Ref AgentStateTable
+  DraftMessageFunctionArn:
+    Value: !GetAtt DraftMessageFunction.Arn
+  HttpApiEndpoint:
+    Value: !Sub https://${HttpApi}.execute-api.${AWS::Region}.amazonaws.com
+

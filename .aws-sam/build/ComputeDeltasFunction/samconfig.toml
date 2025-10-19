@@ -1,0 +1,10 @@
+version = 0.1
+[default.deploy.parameters]
+stack_name = "sam-app"
+resolve_s3 = true
+s3_prefix = "sam-app"
+region = "us-east-1"
+confirm_changeset = true
+capabilities = "CAPABILITY_IAM"
+parameter_overrides = "BucketName=\"aci-progress-473316329834\" TableName=\"aci-agent-state\" BedrockModelId=\"us.anthropic.claude-sonnet-4-20250514-v1:0\" UseBedrock=\"true\""
+image_repositories = []

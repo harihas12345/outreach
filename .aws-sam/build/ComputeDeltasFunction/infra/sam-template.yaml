@@ -1,0 +1,111 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Transform: AWS::Serverless-2016-10-31
+Description: ACI Progress Agent - minimal SAM template (bucket, table, draft_message lambda)
+
+Parameters:
+  BucketName:
+    Type: String
+    Default: aci-progress-473316329834
+  TableName:
+    Type: String
+    Default: aci-agent-state
+  BedrockModelId:
+    Type: String
+    Default: us.anthropic.claude-sonnet-4-20250514-v1:0
+  UseBedrock:
+    Type: String
+    Default: 'true'
+
+Globals:
+  Function:
+    Runtime: python3.10
+    Timeout: 30
+    MemorySize: 256
+    Environment:
+      Variables:
+        BEDROCK_MODEL_ID: !Ref BedrockModelId
+        USE_BEDROCK: !Ref UseBedrock
+
+Resources:
+  ProgressBucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      BucketName: !Ref BucketName
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+
+  AgentStateTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      TableName: !Ref TableName
+      BillingMode: PAY_PER_REQUEST
+      AttributeDefinitions:
+        - AttributeName: pk
+          AttributeType: S
+        - AttributeName: sk
+          AttributeType: S
+      KeySchema:
+        - AttributeName: pk
+          KeyType: HASH
+        - AttributeName: sk
+          KeyType: RANGE
+      SSESpecification:
+        SSEEnabled: true
+
+  DraftMessageFunctionRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: lambda.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
+      Policies:
+        - PolicyName: BedrockInvokeModel
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - bedrock:InvokeModel
+                Resource: '*'
+
+  DraftMessageFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: aci-draft-message
+      Handler: agentcore/tools/draft_message_lambda.handler
+      CodeUri: ../
+      Role: !GetAtt DraftMessageFunctionRole.Arn
+
+  ParseExcelFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: aci-parse-excel
+      Handler: agentcore/tools/parse_excel_lambda.handler
+      CodeUri: ../
+      Role: !GetAtt DraftMessageFunctionRole.Arn
+
+  ComputeDeltasFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: aci-compute-deltas
+      Handler: agentcore/tools/compute_deltas_lambda.handler
+      CodeUri: ../
+      Role: !GetAtt DraftMessageFunctionRole.Arn
+
+Outputs:
+  BucketOut:
+    Value: !Ref ProgressBucket
+  TableOut:
+    Value: !Ref AgentStateTable
+  DraftMessageFunctionArn:
+    Value: !GetAtt DraftMessageFunction.Arn
+

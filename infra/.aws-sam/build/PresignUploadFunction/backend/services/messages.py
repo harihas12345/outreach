@@ -1,0 +1,74 @@
+from __future__ import annotations
+
+import os
+from typing import List
+
+from ..models import StudentRecord
+
+
+def draft_message_template(student: StudentRecord, flags: List[str]) -> str:
+    reasons = ", ".join(flags)
+    return (
+        f"Hi {student.studentName}, I noticed a few signals this week ({reasons}). "
+        f"How are you feeling about the material? Anything I can clarify or help with?"
+    )
+
+
+def draft_message_with_bedrock(student: StudentRecord, flags: List[str]) -> str:
+    try:
+        import boto3  # type: ignore
+    except Exception:
+        return draft_message_template(student, flags)
+
+    model_id = os.getenv("BEDROCK_MODEL_ID", "anthropic.claude-3-5-sonnet-20240620-v1:0")
+    br = boto3.client("bedrock-runtime", region_name=os.getenv("AWS_REGION", "us-east-1"))
+    prompt = (
+        "You are an empathetic instructor. Draft a concise, supportive Slack DM (<= 3 sentences) "
+        "to a learner based on the following context. Avoid shaming; be specific, offer help, and keep a warm tone.\n\n"
+        f"Learner: {student.studentName}\n"
+        f"Signals: {', '.join(flags)}\n"
+        f"Metrics: {student.metrics}\n"
+    )
+    resp = br.converse(
+        modelId=model_id,
+        messages=[{"role": "user", "content": [{"type": "text", "text": prompt}]}],
+        inferenceConfig={"maxTokens": 300, "temperature": 0.3},
+    )
+    try:
+        return resp["output"]["message"]["content"][0]["text"]
+    except Exception:
+        return draft_message_template(student, flags)
+
+
+def draft_message(student: StudentRecord, flags: List[str]) -> str:
+    # Prefer Agent Lambda if configured; else Bedrock direct; else template
+    agent_lambda = os.getenv("AGENT_DRAFT_MESSAGE_LAMBDA_ARN")
+    if agent_lambda:
+        try:
+            import boto3  # type: ignore
+            client = boto3.client("lambda", region_name=os.getenv("AWS_REGION", "us-east-1"))
+            payload = {
+                "student": student.model_dump(),
+                "flags": flags,
+            }
+            resp = client.invoke(
+                FunctionName=agent_lambda,
+                InvocationType="RequestResponse",
+                Payload=bytes(str({"body": payload}), "utf-8"),
+            )
+            raw = resp["Payload"].read().decode("utf-8")
+            import json as _json  # local alias to avoid shadowing
+            body = _json.loads(raw).get("body")
+            if isinstance(body, str):
+                body = _json.loads(body)
+            msg = body.get("message")
+            if msg:
+                return msg
+        except Exception:
+            pass
+
+    use_bedrock = os.getenv("USE_BEDROCK", "false").lower() in {"1", "true", "yes"}
+    if use_bedrock:
+        return draft_message_with_bedrock(student, flags)
+    return draft_message_template(student, flags)
+
