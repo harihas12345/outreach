@@ -3,7 +3,7 @@ from __future__ import annotations
 import os
 from typing import List, Optional
 
-from fastapi import FastAPI, HTTPException, Query
+from fastapi import FastAPI, HTTPException, Query, UploadFile, File, Form
 from fastapi.middleware.cors import CORSMiddleware
 from dotenv import load_dotenv
 import requests
@@ -52,6 +52,22 @@ def ingest(req: IngestRequest) -> List[Notification]:
     # Import lazily so production (without pandas) can still run
     try:
         return ingest_and_queue(req.dataPath, message_all=req.messageAll)
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+@app.post("/ingest-upload", response_model=List[Notification])
+def ingest_upload(file: UploadFile = File(...), messageAll: bool = Form(False)) -> List[Notification]:
+    # Save uploaded file to a temp path and run ingest on it
+    try:
+        import tempfile
+        import shutil
+        suffix = ".xlsx"
+        with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as tmp:
+            with file.file as src:
+                shutil.copyfileobj(src, tmp)
+            tmp_path = tmp.name
+        return ingest_and_queue(tmp_path, message_all=bool(messageAll))
     except Exception as e:
         raise HTTPException(status_code=400, detail=str(e))
 

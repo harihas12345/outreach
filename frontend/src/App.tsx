@@ -22,6 +22,7 @@ export default function App() {
   const [notifications, setNotifications] = useState<Notification[]>([])
   const [filter, setFilter] = useState('pending')
   const [toast, setToast] = useState<string>("")
+  const [messageAll, setMessageAll] = useState(false)
 
   const refresh = useCallback(async () => {
     try {
@@ -41,40 +42,49 @@ export default function App() {
     if (!file) return
     setUploading(true)
     try {
-      const presignResp = await fetch(PRESIGN_URL, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ fileName: file.name, prefix: S3_PREFIX }),
-      })
-      if (!presignResp.ok) {
-        throw new Error(`Presign failed (${presignResp.status})`)
+      if (PRESIGN_URL) {
+        // S3 upload path
+        const presignResp = await fetch(PRESIGN_URL, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ fileName: file.name, prefix: S3_PREFIX }),
+        })
+        if (!presignResp.ok) {
+          throw new Error(`Presign failed (${presignResp.status})`)
+        }
+        const raw = await presignResp.json()
+        const presigned = raw?.presigned ?? raw
+        if (!presigned?.url || !presigned?.fields) {
+          throw new Error('Invalid presign response')
+        }
+        const formData = new FormData()
+        Object.entries(presigned.fields as Record<string, string>).forEach(([k, v]) => formData.append(k, String(v)))
+        formData.append('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet')
+        formData.append('file', file)
+        const s3Post = await fetch(presigned.url, { method: 'POST', body: formData })
+        if (!s3Post.ok) throw new Error('S3 upload failed')
+        setFile(null)
+        setToast('File uploaded to S3. Processing…')
+        setTimeout(() => void refresh(), 3000)
+      } else {
+        // Direct backend upload path
+        if (!BACKEND_URL) throw new Error('Set VITE_BACKEND_URL')
+        const formData = new FormData()
+        formData.append('file', file)
+        formData.append('messageAll', String(messageAll))
+        const resp = await fetch(`${BACKEND_URL.replace(/\/$/, '')}/ingest-upload`, { method: 'POST', body: formData })
+        if (!resp.ok) throw new Error('Upload ingest failed')
+        setFile(null)
+        setToast('File analyzed. Refreshing…')
+        setTimeout(() => void refresh(), 1500)
       }
-      const raw = await presignResp.json()
-      const presigned = raw?.presigned ?? raw
-      const key = raw?.key ?? `${S3_PREFIX}/${file.name}`
-      if (!presigned?.url || !presigned?.fields) {
-        throw new Error('Invalid presign response')
-      }
-
-      const formData = new FormData()
-      Object.entries(presigned.fields as Record<string, string>).forEach(([k, v]) => formData.append(k, String(v)))
-      formData.append('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet')
-      formData.append('file', file)
-      const s3Post = await fetch(presigned.url, { method: 'POST', body: formData })
-      if (!s3Post.ok) throw new Error('S3 upload failed')
-      setFile(null)
-      setToast('File uploaded. Processing…')
-      // Orchestrator fires on S3 event; give it a moment then refresh
-      setTimeout(() => void refresh(), 3000)
     } catch (e) {
       console.error(e)
       setToast('Upload failed')
     } finally {
       setUploading(false)
     }
-  }, [file, refresh])
-
-  const [messageAll, setMessageAll] = useState(false)
+  }, [file, refresh, messageAll])
 
   const onRunAnalysis = useCallback(async () => {
     if (!BACKEND_URL) {
