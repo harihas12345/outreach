@@ -61,6 +61,22 @@
       }
     } catch {}
 
+    // If a "To" field is present (new message modal), populate it with user ID and confirm
+    try {
+      if (user) {
+        const toInput = document.querySelector('input[aria-label^="To"], [data-qa="dm-composer-recipient-input"] input');
+        if (toInput) {
+          toInput.focus();
+          toInput.value = user;
+          toInput.dispatchEvent(new Event('input', { bubbles: true }));
+          await new Promise(r => setTimeout(r, 300));
+          const enter = new KeyboardEvent('keydown', { key: 'Enter', bubbles: true });
+          toInput.dispatchEvent(enter);
+          await new Promise(r => setTimeout(r, 600));
+        }
+      }
+    } catch {}
+
     const composer = await waitForComposer();
     if (!composer) return;
     // Insert text

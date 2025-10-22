@@ -7,7 +7,7 @@ from ..models import StudentRecord
 
 
 def draft_message_template(student: StudentRecord, flags: List[str]) -> str:
-    reasons = ", ".join(flags)
+    reasons = ", ".join([f for f in flags if f])
     # Include compact 3-week summary when present
     hist_parts: List[str] = []
     history = getattr(student, "metricsHistory", None) or {}
@@ -17,10 +17,16 @@ def draft_message_template(student: StudentRecord, flags: List[str]) -> str:
     hist = "; ".join(hist_parts[:3])  # keep short
     recent_conv = getattr(student, "recentConversations", None) or []
     recent_hint = f" Recent notes: {recent_conv[0]['message']}" if recent_conv and recent_conv[0].get('message') else ""
-    base = (
-        f"Hi {student.studentName}, I noticed a few signals this week ({reasons}). "
-        f"I'm here to help—what feels unclear or blocked?"
-    )
+    if reasons:
+        base = (
+            f"Hi {student.studentName}, I noticed this week ({reasons}). "
+            f"I'm here to help—what feels unclear or blocked?"
+        )
+    else:
+        base = (
+            f"Hi {student.studentName}, great job staying engaged this week. "
+            f"Would you like a quick check-in or tips to keep the momentum?"
+        )
     if hist:
         base += f" Recent trend — {hist}."
     base += recent_hint

@@ -130,7 +130,9 @@ export default function App() {
         } catch {}
         // Also open Slack Web with payload for the helper extension
         try {
-          const webUrl = String(data?.webDmUrl || `https://app.slack.com/client/${SLACK_TEAM_ID}/user_profile/${encodeURIComponent(n.slackUserId)}`) + `?aci_msg=${encodeURIComponent(String(data?.message || ''))}&aci_user=${encodeURIComponent(n.slackUserId)}`
+          const base = String(data?.webDmUrl || `https://app.slack.com/client/${SLACK_TEAM_ID}/user_profile/${encodeURIComponent(n.slackUserId)}`)
+          const sep = base.includes('?') ? '&' : '?'
+          const webUrl = `${base}${sep}aci_msg=${encodeURIComponent(String(data?.message || ''))}&aci_user=${encodeURIComponent(n.slackUserId)}`
           window.open(webUrl, '_blank', 'noopener')
         } catch {}
         // Additionally open the native slack:// deep link if available (desktop app opens DM reliably)
@@ -179,7 +181,7 @@ export default function App() {
 
       <div className="grid">
         <section className="card">
-          <h2>{HAS_PRESIGN ? 'Upload weekly Excel' : 'Run analysis (no upload configured)'}</h2>
+          <h2>{HAS_PRESIGN ? 'Upload weekly Excel' : 'Upload or run analysis'}</h2>
           <div className="row" style={{ marginTop: 8 }}>
             {HAS_PRESIGN ? (
               <>
@@ -195,6 +197,11 @@ export default function App() {
                   <input type="checkbox" checked={messageAll} onChange={e => setMessageAll(e.target.checked)} />
                   Message everyone with Slack IDs
                 </label>
+                <div className="spacer" />
+                <input className="input" type="file" accept=".xlsx" onChange={e => setFile(e.target.files?.[0] ?? null)} />
+                <button className="btn" onClick={onUpload} disabled={!file || uploading}>
+                  {uploading ? 'Uploading…' : 'Upload & analyze'}
+                </button>
                 <div className="spacer" />
                 <button className="btn btn-primary" onClick={onRunAnalysis} disabled={uploading}>
                   {uploading ? 'Running…' : 'Run analysis'}
