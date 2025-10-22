@@ -28,11 +28,22 @@ NEXT_AFTER_SEND_MESSAGE = os.getenv(
 # Internal send tracking to avoid infinite re-queueing
 FOLLOWUP_QUEUED = False
 LAST_SENT_USER_ID: Optional[str] = None
+AUTO_SEND_APPROVED = os.getenv("AUTO_SEND_APPROVED", "true").lower() in {"1", "true", "yes"}
+PROCESSED_APPROVED: set[str] = set()
 
 
 def fetch_pending() -> List[dict]:
     try:
         r = requests.get(f"{API_BASE}/notifications", params={"status": "pending"}, timeout=10)
+        r.raise_for_status()
+        return r.json()
+    except Exception:
+        return []
+
+
+def fetch_approved() -> List[dict]:
+    try:
+        r = requests.get(f"{API_BASE}/notifications", params={"status": "approved"}, timeout=10)
         r.raise_for_status()
         return r.json()
     except Exception:
@@ -194,6 +205,28 @@ class NotifierApp:
         while True:
             notes = fetch_pending()
             self.root.after(0, lambda n=notes: self.refresh_list(n))
+            # Background: auto-send items that were approved outside this app (e.g., via web UI)
+            if AUTO_SEND_APPROVED:
+                try:
+                    approved = fetch_approved()
+                    for n in approved:
+                        nid = n.get("id")
+                        if not nid or nid in PROCESSED_APPROVED or nid in self.hidden_ids:
+                            continue
+                        # Reuse decision endpoint to obtain deep link and message
+                        try:
+                            res = post_decision(nid, "approve")
+                            if res.get("action") == "open_slack":
+                                deep = res.get("deepLink", "")
+                                msg = res.get("message", n.get("message", ""))
+                                target_id = n.get("slackUserId") or os.getenv("FORCE_SLACK_USER_ID", "").strip()
+                                PROCESSED_APPROVED.add(nid)
+                                threading.Thread(target=open_and_type, args=(deep, msg, nid, target_id), daemon=True).start()
+                        except Exception:
+                            PROCESSED_APPROVED.add(nid)
+                            continue
+                except Exception:
+                    pass
             time.sleep(POLL_SECONDS)
 
     def run(self) -> None:

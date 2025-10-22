@@ -6,6 +6,7 @@ from typing import List, Optional
 from fastapi import FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
 from dotenv import load_dotenv
+import requests
 
 from .models import (
     DecisionRequest,
@@ -17,6 +18,7 @@ from .models import (
     EditMessageRequest,
 )
 from .services import storage
+from .orchestrator import ingest_and_queue
 
 
 load_dotenv()
@@ -49,11 +51,7 @@ def health() -> HealthResponse:
 def ingest(req: IngestRequest) -> List[Notification]:
     # Import lazily so production (without pandas) can still run
     try:
-        from .orchestrator import ingest_and_queue  # type: ignore
-    except Exception:
-        raise HTTPException(status_code=503, detail="ingest not available in this deployment")
-    try:
-        return ingest_and_queue(req.dataPath)
+        return ingest_and_queue(req.dataPath, message_all=req.messageAll)
     except Exception as e:
         raise HTTPException(status_code=400, detail=str(e))
 
@@ -79,10 +77,43 @@ def decision(req: DecisionRequest) -> DecisionResponse:
     if req.decision == "deny":
         return DecisionResponse(action="none")
 
-    team_id = os.getenv("SLACK_TEAM_ID", "")
+    team_id = os.getenv("SLACK_TEAM_ID", "T0HQD7V5M")
     override_id = os.getenv("FORCE_SLACK_USER_ID", "").strip()
     target_id = override_id or note.slackUserId
     deep_link = f"slack://user?team={team_id}&id={target_id}"
+
+    # If a Slack bot token is configured, send directly via Web API or provide precise Web DM URL
+    bot_token = os.getenv("SLACK_BOT_TOKEN", "").strip()
+    if bot_token and target_id:
+        try:
+            headers = {"Authorization": f"Bearer {bot_token}", "Content-Type": "application/json; charset=utf-8"}
+            # Open (or get) a DM channel with the target user
+            r_open = requests.post(
+                "https://slack.com/api/conversations.open",
+                headers=headers,
+                json={"users": target_id},
+                timeout=10,
+            )
+            data_open = r_open.json()
+            if data_open.get("ok"):
+                channel_id = data_open["channel"]["id"]
+                web_dm_url = f"https://app.slack.com/client/{team_id}/{channel_id}?aci_user={target_id}"
+                r_msg = requests.post(
+                    "https://slack.com/api/chat.postMessage",
+                    headers=headers,
+                    json={"channel": channel_id, "text": note.message},
+                    timeout=10,
+                )
+                data_msg = r_msg.json()
+                if data_msg.get("ok"):
+                    storage.update_notification_status(req.notificationId, "sent")
+                    return DecisionResponse(action="sent", message=note.message, webDmUrl=web_dm_url)
+                # If sending fails, still return the precise Web DM URL for manual send
+                return DecisionResponse(action="open_slack", deepLink=deep_link, message=note.message, webDmUrl=web_dm_url)
+        except Exception:
+            # Fall back to deeplink if API send fails
+            pass
+
     return DecisionResponse(action="open_slack", deepLink=deep_link, message=note.message)
 
 

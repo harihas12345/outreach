@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from datetime import datetime, timedelta
-from typing import Dict, List, Tuple
+from typing import Dict, List
 
 from ..models import Delta, StudentRecord
 
@@ -57,10 +57,23 @@ def decide_flags(
         else:
             student_flags.append("no_last_active_recorded")
 
-        # Negative momentum rule: any metric drop >= 5
-        for d in deltas_by_student.get(student_id, []):
-            if d.change <= -5.0:
-                student_flags.append(f"drop_{d.metric}_{d.previous}_to_{d.current}")
+        # Negative momentum rule: any metric drop >= 5 week-over-week
+        drops = [d for d in deltas_by_student.get(student_id, []) if d.change <= -5.0]
+        for d in drops:
+            student_flags.append(f"drop_{d.metric}_{d.previous}_to_{d.current}")
+
+        # 3-week trend rule: if metric decreased in at least 2 consecutive steps
+        rec = latest_by_student[student_id]
+        history = getattr(rec, "metricsHistory", None) or {}
+        for metric, points in history.items():
+            # points is list of {week, value} in ascending week order based on orchestrator
+            if len(points) >= 3:
+                v1 = float(points[-3]["value"])  # oldest
+                v2 = float(points[-2]["value"])  # middle
+                v3 = float(points[-1]["value"])  # latest
+                decreases = int(v2 < v1) + int(v3 < v2)
+                if decreases >= 2 and (v1 - v3) >= 5.0:
+                    student_flags.append(f"three_week_downtrend_{metric}_{v1}_to_{v3}")
 
         if student_flags:
             flags[student_id] = student_flags

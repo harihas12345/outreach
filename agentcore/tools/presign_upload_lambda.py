@@ -1,7 +1,6 @@
 import json
 import os
 import time
-from typing import Any, Dict
 
 
 def handler(event, context):
@@ -14,17 +13,13 @@ def handler(event, context):
             "body": json.dumps({"error": "boto3 not available"}),
         }
 
-    body = event.get("body")
+    body = event.get("body") or {}
     if isinstance(body, str):
         try:
             body = json.loads(body)
         except Exception:
             body = {}
-    if not isinstance(body, dict):
-        body = {}
 
-    file_name = body.get("fileName") or f"upload-{int(time.time())}.xlsx"
-    prefix = body.get("prefix", "")
     bucket = os.environ.get("BUCKET_NAME")
     if not bucket:
         return {
@@ -33,11 +28,13 @@ def handler(event, context):
             "body": json.dumps({"error": "BUCKET_NAME not configured"}),
         }
 
+    file_name = body.get("fileName") or f"upload-{int(time.time())}.xlsx"
+    prefix = (body.get("prefix") or "").strip()
     key = f"{prefix}/{file_name}" if prefix else file_name
-    s3 = boto3.client("s3")
 
-    conditions = [["starts-with", "$Content-Type", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"]]
+    s3 = boto3.client("s3")
     fields = {"Content-Type": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"}
+    conditions = [["starts-with", "$Content-Type", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"]]
     presigned = s3.generate_presigned_post(
         Bucket=bucket,
         Key=key,
@@ -45,10 +42,12 @@ def handler(event, context):
         Conditions=conditions,
         ExpiresIn=3600,
     )
+
     return {
         "statusCode": 200,
         "headers": {"content-type": "application/json"},
         "body": json.dumps({"bucket": bucket, "key": key, "presigned": presigned}),
     }
+
 
 

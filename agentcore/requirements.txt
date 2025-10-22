@@ -1,0 +1,7 @@
+boto3==1.35.70
+openpyxl==3.1.5
+requests==2.32.3
+
+
+
+

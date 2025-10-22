@@ -29,8 +29,13 @@ def _extract_metrics(df: pd.DataFrame) -> pd.DataFrame:
 
 def load_weekly_records(data_dir: str | None) -> Tuple[Dict[str, StudentRecord], Dict[str, List[StudentRecord]]]:
     base = Path(data_dir or "data")
-    base.mkdir(parents=True, exist_ok=True)
-    files = sorted(base.glob("*.xlsx"))
+    # Accept either a directory (containing weekly .xlsx) or a single .xlsx file
+    files: List[Path]
+    if base.is_file() and base.suffix.lower() == ".xlsx":
+        files = [base]
+    else:
+        base.mkdir(parents=True, exist_ok=True)
+        files = sorted(base.glob("*.xlsx"))
     if not files:
         return {}, {}
 

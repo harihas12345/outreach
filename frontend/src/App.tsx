@@ -13,12 +13,15 @@ type Notification = {
 const PRESIGN_URL = String((import.meta as any).env?.VITE_PRESIGN_URL || '')
 const BACKEND_URL = String((import.meta as any).env?.VITE_BACKEND_URL || '')
 const S3_PREFIX = String((import.meta as any).env?.VITE_S3_PREFIX || 'uploads')
+const SLACK_TEAM_ID = String((import.meta as any).env?.VITE_SLACK_TEAM_ID || 'T0HQD7V5M')
+const HAS_PRESIGN = !!PRESIGN_URL
 
 export default function App() {
   const [file, setFile] = useState<File | null>(null)
   const [uploading, setUploading] = useState(false)
   const [notifications, setNotifications] = useState<Notification[]>([])
   const [filter, setFilter] = useState('pending')
+  const [toast, setToast] = useState<string>("")
 
   const refresh = useCallback(async () => {
     try {
@@ -43,32 +46,97 @@ export default function App() {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ fileName: file.name, prefix: S3_PREFIX }),
       })
-      const { presigned, key } = await presignResp.json()
+      if (!presignResp.ok) {
+        throw new Error(`Presign failed (${presignResp.status})`)
+      }
+      const raw = await presignResp.json()
+      const presigned = raw?.presigned ?? raw
+      const key = raw?.key ?? `${S3_PREFIX}/${file.name}`
+      if (!presigned?.url || !presigned?.fields) {
+        throw new Error('Invalid presign response')
+      }
 
       const formData = new FormData()
-      Object.entries(presigned.fields).forEach(([k, v]) => formData.append(k, String(v)))
+      Object.entries(presigned.fields as Record<string, string>).forEach(([k, v]) => formData.append(k, String(v)))
       formData.append('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet')
       formData.append('file', file)
       const s3Post = await fetch(presigned.url, { method: 'POST', body: formData })
       if (!s3Post.ok) throw new Error('S3 upload failed')
       setFile(null)
+      setToast('File uploaded. Processing…')
       // Orchestrator fires on S3 event; give it a moment then refresh
       setTimeout(() => void refresh(), 3000)
     } catch (e) {
       console.error(e)
-      alert('Upload failed')
+      setToast('Upload failed')
     } finally {
       setUploading(false)
     }
   }, [file, refresh])
 
-  const onApprove = useCallback(async (id: string) => {
-    await fetch(`${BACKEND_URL.replace(/\/$/, '')}/decision`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ notificationId: id, decision: 'approve' }),
-    })
-    void refresh()
+  const [messageAll, setMessageAll] = useState(false)
+
+  const onRunAnalysis = useCallback(async () => {
+    if (!BACKEND_URL) {
+      setToast('Set VITE_BACKEND_URL in the frontend environment')
+      return
+    }
+    setUploading(true)
+    try {
+      const resp = await fetch(`${BACKEND_URL.replace(/\/$/, '')}/ingest`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ messageAll }),
+      })
+      if (!resp.ok) throw new Error('Ingest failed')
+      setToast('Analysis queued. Refreshing…')
+      setTimeout(() => void refresh(), 1500)
+    } catch (e) {
+      console.error(e)
+      setToast('Ingest failed')
+    } finally {
+      setUploading(false)
+    }
+  }, [refresh, messageAll])
+
+  const onApprove = useCallback(async (n: Notification) => {
+    try {
+      const resp = await fetch(`${BACKEND_URL.replace(/\/$/, '')}/decision`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ notificationId: n.id, decision: 'approve' }),
+      })
+      let data: any = {}
+      try { data = await resp.json() } catch {}
+      if (resp.ok && data?.action === 'open_slack') {
+        // Copy the drafted message to clipboard for quick paste
+        if (data?.message && navigator?.clipboard?.writeText) {
+          try { await navigator.clipboard.writeText(String(data.message)) } catch {}
+        }
+        // Stash payload for optional browser extension on Slack Web
+        try {
+          sessionStorage.setItem('aci_msg', String(data?.message || ''))
+          sessionStorage.setItem('aci_user', String(n.slackUserId || ''))
+        } catch {}
+        // Also open Slack Web with payload for the helper extension
+        try {
+          const webUrl = String(data?.webDmUrl || `https://app.slack.com/client/${SLACK_TEAM_ID}/user_profile/${encodeURIComponent(n.slackUserId)}`) + `?aci_msg=${encodeURIComponent(String(data?.message || ''))}&aci_user=${encodeURIComponent(n.slackUserId)}`
+          window.open(webUrl, '_blank', 'noopener')
+        } catch {}
+        // Additionally open the native slack:// deep link if available (desktop app opens DM reliably)
+        try {
+          if (data?.deepLink) {
+            window.open(String(data.deepLink), '_blank', 'noopener')
+          }
+        } catch {}
+        // Inform the user
+        if (data?.message) alert('Message copied. If a Slack helper extension is installed, it will paste/send automatically. Otherwise, paste (Ctrl+V) and send.')
+      }
+    } catch (e) {
+      console.error(e)
+    } finally {
+      void refresh()
+    }
   }, [refresh])
 
   const onDeny = useCallback(async (id: string) => {
@@ -90,34 +158,62 @@ export default function App() {
   }, [refresh])
 
   return (
-    <div style={{ maxWidth: 900, margin: '0 auto', padding: 24, fontFamily: 'system-ui, sans-serif' }}>
-      <h1>ACI Progress</h1>
-      <section style={{ border: '1px solid #ddd', padding: 16, borderRadius: 8, marginBottom: 24 }}>
-        <h2>Upload weekly Excel</h2>
-        <input type="file" accept=".xlsx" onChange={e => setFile(e.target.files?.[0] ?? null)} />
-        <button onClick={onUpload} disabled={!file || uploading} style={{ marginLeft: 12 }}>
-          {uploading ? 'Uploading…' : 'Upload'}
-        </button>
-      </section>
-
-      <section style={{ border: '1px solid #ddd', padding: 16, borderRadius: 8 }}>
-        <h2>Queued notifications</h2>
-        <label>
-          Filter:
-          <select value={filter} onChange={e => setFilter(e.target.value)} style={{ marginLeft: 8 }}>
-            <option value="">All</option>
-            <option value="pending">Pending</option>
-            <option value="approved">Approved</option>
-            <option value="denied">Denied</option>
-          </select>
-        </label>
-        <div style={{ marginTop: 12 }}>
-          {notifications.map(n => (
-            <NotificationRow key={n.id} n={n} onApprove={onApprove} onDeny={onDeny} onSaveMessage={onSaveMessage} />
-          ))}
-          {notifications.length === 0 && <div>No notifications</div>}
+    <div className="container">
+      <div className="app-header">
+        <div>
+          <div className="title">ACI Progress</div>
+          <div className="subtitle">Upload sheets, curate messages, approve or deny</div>
         </div>
-      </section>
+      </div>
+      {toast && <div className="toast">{toast}</div>}
+
+      <div className="grid">
+        <section className="card">
+          <h2>{HAS_PRESIGN ? 'Upload weekly Excel' : 'Run analysis (no upload configured)'}</h2>
+          <div className="row" style={{ marginTop: 8 }}>
+            {HAS_PRESIGN ? (
+              <>
+                <input className="input" type="file" accept=".xlsx" onChange={e => setFile(e.target.files?.[0] ?? null)} />
+                <div className="spacer" />
+                <button className="btn btn-primary" onClick={onUpload} disabled={!file || uploading}>
+                  {uploading ? 'Uploading…' : 'Upload'}
+                </button>
+              </>
+            ) : (
+              <>
+                <label style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                  <input type="checkbox" checked={messageAll} onChange={e => setMessageAll(e.target.checked)} />
+                  Message everyone with Slack IDs
+                </label>
+                <div className="spacer" />
+                <button className="btn btn-primary" onClick={onRunAnalysis} disabled={uploading}>
+                  {uploading ? 'Running…' : 'Run analysis'}
+                </button>
+              </>
+            )}
+          </div>
+        </section>
+
+        <section className="card">
+          <h2>Queued notifications</h2>
+          <div className="row" style={{ marginTop: 8 }}>
+            <span className="badge">Filter</span>
+            <select className="select" value={filter} onChange={e => setFilter(e.target.value)}>
+              <option value="">All</option>
+              <option value="pending">Pending</option>
+              <option value="approved">Approved</option>
+              <option value="denied">Denied</option>
+            </select>
+            <div className="spacer" />
+          </div>
+          <div style={{ marginTop: 12 }}>
+            {notifications.map(n => (
+              <NotificationRow key={n.id} n={n} onApprove={() => onApprove(n)} onDeny={onDeny} onSaveMessage={onSaveMessage} />
+            ))}
+            {notifications.length === 0 && <div className="list-empty">No notifications</div>}
+          </div>
+        </section>
+      </div>
     </div>
   )
 }

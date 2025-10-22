@@ -15,6 +15,9 @@ Parameters:
   UseBedrock:
     Type: String
     Default: 'true'
+  UseLlmDecide:
+    Type: String
+    Default: 'false'
   QueueApiBase:
     Type: String
     Default: https://REPLACE_WITH_API
@@ -96,39 +99,48 @@ Resources:
     Properties:
       FunctionName:
         Fn::Sub: ${AWS::StackName}-draft-message
-      Handler: agentcore/tools/draft_message_lambda.handler
+      Handler: tools/draft_message_lambda.handler
       CodeUri: DraftMessageFunction
       Role:
         Fn::GetAtt:
         - DraftMessageFunctionRole
         - Arn
     Metadata:
+      BuildMethod: python3.10
+      BuildProperties:
+        RequirementsFile: requirements-lambda.txt
       SamResourceId: DraftMessageFunction
   ParseExcelFunction:
     Type: AWS::Serverless::Function
     Properties:
       FunctionName:
         Fn::Sub: ${AWS::StackName}-parse-excel
-      Handler: agentcore/tools/parse_excel_lambda.handler
+      Handler: tools/parse_excel_lambda.handler
       CodeUri: ParseExcelFunction
       Role:
         Fn::GetAtt:
         - DraftMessageFunctionRole
         - Arn
     Metadata:
+      BuildMethod: python3.10
+      BuildProperties:
+        RequirementsFile: requirements-lambda.txt
       SamResourceId: ParseExcelFunction
   ComputeDeltasFunction:
     Type: AWS::Serverless::Function
     Properties:
       FunctionName:
         Fn::Sub: ${AWS::StackName}-compute-deltas
-      Handler: agentcore/tools/compute_deltas_lambda.handler
+      Handler: tools/compute_deltas_lambda.handler
       CodeUri: ComputeDeltasFunction
       Role:
         Fn::GetAtt:
         - DraftMessageFunctionRole
         - Arn
     Metadata:
+      BuildMethod: python3.10
+      BuildProperties:
+        RequirementsFile: requirements-lambda.txt
       SamResourceId: ComputeDeltasFunction
   OrchestratorFunctionRole:
     Type: AWS::IAM::Role
@@ -185,7 +197,7 @@ Resources:
     Properties:
       FunctionName:
         Fn::Sub: ${AWS::StackName}-orchestrate-ingest
-      Handler: agentcore/tools/orchestrate_ingest_lambda.handler
+      Handler: tools/orchestrate_ingest_lambda.handler
       CodeUri: OrchestrateIngestFunction
       Role:
         Fn::GetAtt:
@@ -203,6 +215,8 @@ Resources:
             Fn::GetAtt:
             - DraftMessageFunction
             - Arn
+          USE_LLM_DECIDE:
+            Ref: UseLlmDecide
       Events:
         S3Upload:
           Type: S3
@@ -216,6 +230,9 @@ Resources:
                 - Name: suffix
                   Value: .xlsx
     Metadata:
+      BuildMethod: python3.10
+      BuildProperties:
+        RequirementsFile: requirements-lambda.txt
       SamResourceId: OrchestrateIngestFunction
   HttpApi:
     Type: AWS::Serverless::HttpApi
@@ -257,7 +274,7 @@ Resources:
     Properties:
       FunctionName:
         Fn::Sub: ${AWS::StackName}-presign-upload
-      Handler: agentcore/tools/presign_upload_lambda.handler
+      Handler: tools/presign_upload_lambda.handler
       CodeUri: PresignUploadFunction
       Role:
         Fn::GetAtt:
@@ -276,6 +293,9 @@ Resources:
             Path: /presign
             Method: POST
     Metadata:
+      BuildMethod: python3.10
+      BuildProperties:
+        RequirementsFile: requirements-lambda.txt
       SamResourceId: PresignUploadFunction
 Outputs:
   BucketOut:

@@ -15,6 +15,12 @@ Parameters:
   UseBedrock:
     Type: String
     Default: 'true'
+  UseLlmDecide:
+    Type: String
+    Default: 'false'
+  QueueApiBase:
+    Type: String
+    Default: https://REPLACE_WITH_API
 Globals:
   Function:
     Runtime: python3.10
@@ -37,6 +43,18 @@ Resources:
         BlockPublicPolicy: true
         IgnorePublicAcls: true
         RestrictPublicBuckets: true
+      CorsConfiguration:
+        CorsRules:
+        - AllowedOrigins:
+          - '*'
+          AllowedMethods:
+          - GET
+          - HEAD
+          - PUT
+          - POST
+          AllowedHeaders:
+          - '*'
+          MaxAge: 3000
   AgentStateTable:
     Type: AWS::DynamoDB::Table
     Properties:
@@ -79,39 +97,206 @@ Resources:
   DraftMessageFunction:
     Type: AWS::Serverless::Function
     Properties:
-      FunctionName: aci-draft-message
-      Handler: agentcore/tools/draft_message_lambda.handler
+      FunctionName:
+        Fn::Sub: ${AWS::StackName}-draft-message
+      Handler: tools/draft_message_lambda.handler
       CodeUri: DraftMessageFunction
       Role:
         Fn::GetAtt:
         - DraftMessageFunctionRole
         - Arn
     Metadata:
+      BuildMethod: python3.10
+      BuildProperties:
+        RequirementsFile: requirements-lambda.txt
       SamResourceId: DraftMessageFunction
   ParseExcelFunction:
     Type: AWS::Serverless::Function
     Properties:
-      FunctionName: aci-parse-excel
-      Handler: agentcore/tools/parse_excel_lambda.handler
+      FunctionName:
+        Fn::Sub: ${AWS::StackName}-parse-excel
+      Handler: tools/parse_excel_lambda.handler
       CodeUri: ParseExcelFunction
       Role:
         Fn::GetAtt:
         - DraftMessageFunctionRole
         - Arn
     Metadata:
+      BuildMethod: python3.10
+      BuildProperties:
+        RequirementsFile: requirements-lambda.txt
       SamResourceId: ParseExcelFunction
   ComputeDeltasFunction:
     Type: AWS::Serverless::Function
     Properties:
-      FunctionName: aci-compute-deltas
-      Handler: agentcore/tools/compute_deltas_lambda.handler
+      FunctionName:
+        Fn::Sub: ${AWS::StackName}-compute-deltas
+      Handler: tools/compute_deltas_lambda.handler
       CodeUri: ComputeDeltasFunction
       Role:
         Fn::GetAtt:
         - DraftMessageFunctionRole
         - Arn
     Metadata:
+      BuildMethod: python3.10
+      BuildProperties:
+        RequirementsFile: requirements-lambda.txt
       SamResourceId: ComputeDeltasFunction
+  OrchestratorFunctionRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+        - Effect: Allow
+          Principal:
+            Service: lambda.amazonaws.com
+          Action: sts:AssumeRole
+      ManagedPolicyArns:
+      - arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
+      Policies:
+      - PolicyName: S3ReadList
+        PolicyDocument:
+          Version: '2012-10-17'
+          Statement:
+          - Effect: Allow
+            Action:
+            - s3:GetObject
+            - s3:ListBucket
+            Resource:
+            - Fn::Sub: arn:aws:s3:::${BucketName}
+            - Fn::Sub: arn:aws:s3:::${BucketName}/*
+      - PolicyName: DynamoWrite
+        PolicyDocument:
+          Version: '2012-10-17'
+          Statement:
+          - Effect: Allow
+            Action:
+            - dynamodb:PutItem
+            - dynamodb:UpdateItem
+            - dynamodb:BatchWriteItem
+            - dynamodb:Query
+            - dynamodb:GetItem
+            Resource:
+              Fn::GetAtt:
+              - AgentStateTable
+              - Arn
+      - PolicyName: LambdaInvokeDraft
+        PolicyDocument:
+          Version: '2012-10-17'
+          Statement:
+          - Effect: Allow
+            Action:
+            - lambda:InvokeFunction
+            Resource:
+              Fn::GetAtt:
+              - DraftMessageFunction
+              - Arn
+  OrchestrateIngestFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName:
+        Fn::Sub: ${AWS::StackName}-orchestrate-ingest
+      Handler: tools/orchestrate_ingest_lambda.handler
+      CodeUri: OrchestrateIngestFunction
+      Role:
+        Fn::GetAtt:
+        - OrchestratorFunctionRole
+        - Arn
+      Environment:
+        Variables:
+          BUCKET_NAME:
+            Ref: BucketName
+          TABLE_NAME:
+            Ref: TableName
+          QUEUE_API_BASE:
+            Ref: QueueApiBase
+          AGENT_DRAFT_MESSAGE_LAMBDA_ARN:
+            Fn::GetAtt:
+            - DraftMessageFunction
+            - Arn
+          USE_LLM_DECIDE:
+            Ref: UseLlmDecide
+      Events:
+        S3Upload:
+          Type: S3
+          Properties:
+            Bucket:
+              Ref: ProgressBucket
+            Events: s3:ObjectCreated:*
+            Filter:
+              S3Key:
+                Rules:
+                - Name: suffix
+                  Value: .xlsx
+    Metadata:
+      BuildMethod: python3.10
+      BuildProperties:
+        RequirementsFile: requirements-lambda.txt
+      SamResourceId: OrchestrateIngestFunction
+  HttpApi:
+    Type: AWS::Serverless::HttpApi
+    Properties:
+      CorsConfiguration:
+        AllowOrigins:
+        - '*'
+        AllowMethods:
+        - GET
+        - POST
+        - PUT
+        - OPTIONS
+        AllowHeaders:
+        - '*'
+  PresignUploadFunctionRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+        - Effect: Allow
+          Principal:
+            Service: lambda.amazonaws.com
+          Action: sts:AssumeRole
+      ManagedPolicyArns:
+      - arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
+      Policies:
+      - PolicyName: S3PutForPresign
+        PolicyDocument:
+          Version: '2012-10-17'
+          Statement:
+          - Effect: Allow
+            Action:
+            - s3:PutObject
+            Resource:
+            - Fn::Sub: arn:aws:s3:::${BucketName}/*
+  PresignUploadFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName:
+        Fn::Sub: ${AWS::StackName}-presign-upload
+      Handler: tools/presign_upload_lambda.handler
+      CodeUri: PresignUploadFunction
+      Role:
+        Fn::GetAtt:
+        - PresignUploadFunctionRole
+        - Arn
+      Environment:
+        Variables:
+          BUCKET_NAME:
+            Ref: BucketName
+      Events:
+        ApiEvent:
+          Type: HttpApi
+          Properties:
+            ApiId:
+              Ref: HttpApi
+            Path: /presign
+            Method: POST
+    Metadata:
+      BuildMethod: python3.10
+      BuildProperties:
+        RequirementsFile: requirements-lambda.txt
+      SamResourceId: PresignUploadFunction
 Outputs:
   BucketOut:
     Value:
@@ -124,3 +309,6 @@ Outputs:
       Fn::GetAtt:
       - DraftMessageFunction
       - Arn
+  HttpApiEndpoint:
+    Value:
+      Fn::Sub: https://${HttpApi}.execute-api.${AWS::Region}.amazonaws.com

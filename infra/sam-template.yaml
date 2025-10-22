@@ -15,6 +15,9 @@ Parameters:
   UseBedrock:
     Type: String
     Default: 'true'
+  UseLlmDecide:
+    Type: String
+    Default: 'false'
   QueueApiBase:
     Type: String
     Default: https://REPLACE_WITH_API
@@ -28,18 +31,8 @@ Globals:
       Variables:
         BEDROCK_MODEL_ID: !Ref BedrockModelId
         USE_BEDROCK: !Ref UseBedrock
-    Layers:
-      - !Ref PandasLayer
 
 Resources:
-  PandasLayer:
-    Type: AWS::Serverless::LayerVersion
-    Properties:
-      LayerName: !Sub ${AWS::StackName}-pandas
-      ContentUri: ../infra/pandas-layer/
-      CompatibleRuntimes:
-        - python3.10
-      RetentionPolicy: Delete
   ProgressBucket:
     Type: AWS::S3::Bucket
     Properties:
@@ -100,25 +93,37 @@ Resources:
     Type: AWS::Serverless::Function
     Properties:
       FunctionName: !Sub ${AWS::StackName}-draft-message
-      Handler: agentcore/tools/draft_message_lambda.handler
-      CodeUri: ../
+      Handler: tools/draft_message_lambda.handler
+      CodeUri: ../agentcore
       Role: !GetAtt DraftMessageFunctionRole.Arn
+    Metadata:
+      BuildMethod: python3.10
+      BuildProperties:
+        RequirementsFile: requirements-lambda.txt
 
   ParseExcelFunction:
     Type: AWS::Serverless::Function
     Properties:
       FunctionName: !Sub ${AWS::StackName}-parse-excel
-      Handler: agentcore/tools/parse_excel_lambda.handler
-      CodeUri: ../
+      Handler: tools/parse_excel_lambda.handler
+      CodeUri: ../agentcore
       Role: !GetAtt DraftMessageFunctionRole.Arn
+    Metadata:
+      BuildMethod: python3.10
+      BuildProperties:
+        RequirementsFile: requirements-lambda.txt
 
   ComputeDeltasFunction:
     Type: AWS::Serverless::Function
     Properties:
       FunctionName: !Sub ${AWS::StackName}-compute-deltas
-      Handler: agentcore/tools/compute_deltas_lambda.handler
-      CodeUri: ../
+      Handler: tools/compute_deltas_lambda.handler
+      CodeUri: ../agentcore
       Role: !GetAtt DraftMessageFunctionRole.Arn
+    Metadata:
+      BuildMethod: python3.10
+      BuildProperties:
+        RequirementsFile: requirements-lambda.txt
 
   OrchestratorFunctionRole:
     Type: AWS::IAM::Role
@@ -169,8 +174,8 @@ Resources:
     Type: AWS::Serverless::Function
     Properties:
       FunctionName: !Sub ${AWS::StackName}-orchestrate-ingest
-      Handler: agentcore/tools/orchestrate_ingest_lambda.handler
-      CodeUri: ../
+      Handler: tools/orchestrate_ingest_lambda.handler
+      CodeUri: ../agentcore
       Role: !GetAtt OrchestratorFunctionRole.Arn
       Environment:
         Variables:
@@ -178,6 +183,7 @@ Resources:
           TABLE_NAME: !Ref TableName
           QUEUE_API_BASE: !Ref QueueApiBase
           AGENT_DRAFT_MESSAGE_LAMBDA_ARN: !GetAtt DraftMessageFunction.Arn
+          USE_LLM_DECIDE: !Ref UseLlmDecide
       Events:
         S3Upload:
           Type: S3
@@ -189,6 +195,10 @@ Resources:
                 Rules:
                   - Name: suffix
                     Value: .xlsx
+    Metadata:
+      BuildMethod: python3.10
+      BuildProperties:
+        RequirementsFile: requirements-lambda.txt
 
   HttpApi:
     Type: AWS::Serverless::HttpApi
@@ -231,8 +241,8 @@ Resources:
     Type: AWS::Serverless::Function
     Properties:
       FunctionName: !Sub ${AWS::StackName}-presign-upload
-      Handler: agentcore/tools/presign_upload_lambda.handler
-      CodeUri: ../
+      Handler: tools/presign_upload_lambda.handler
+      CodeUri: ../agentcore
       Role: !GetAtt PresignUploadFunctionRole.Arn
       Environment:
         Variables:
@@ -244,6 +254,10 @@ Resources:
             ApiId: !Ref HttpApi
             Path: /presign
             Method: POST
+    Metadata:
+      BuildMethod: python3.10
+      BuildProperties:
+        RequirementsFile: requirements-lambda.txt
 
 Outputs:
   BucketOut:

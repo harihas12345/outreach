@@ -1,0 +1,18 @@
+{
+  "manifest_version": 3,
+  "name": "ACI Slack Auto-Send",
+  "version": "0.1.0",
+  "description": "Paste and send approved messages in Slack Web automatically.",
+  "content_scripts": [
+    {
+      "matches": ["https://app.slack.com/client/*"],
+      "js": ["content.js"],
+      "run_at": "document_idle"
+    }
+  ],
+  "permissions": []
+}
+
+
+
+

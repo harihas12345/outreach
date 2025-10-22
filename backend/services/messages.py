@@ -8,10 +8,23 @@ from ..models import StudentRecord
 
 def draft_message_template(student: StudentRecord, flags: List[str]) -> str:
     reasons = ", ".join(flags)
-    return (
+    # Include compact 3-week summary when present
+    hist_parts: List[str] = []
+    history = getattr(student, "metricsHistory", None) or {}
+    for metric, pts in history.items():
+        if len(pts) >= 3:
+            hist_parts.append(f"{metric}: {pts[-3]['value']}→{pts[-2]['value']}→{pts[-1]['value']}")
+    hist = "; ".join(hist_parts[:3])  # keep short
+    recent_conv = getattr(student, "recentConversations", None) or []
+    recent_hint = f" Recent notes: {recent_conv[0]['message']}" if recent_conv and recent_conv[0].get('message') else ""
+    base = (
         f"Hi {student.studentName}, I noticed a few signals this week ({reasons}). "
-        f"How are you feeling about the material? Anything I can clarify or help with?"
+        f"I'm here to help—what feels unclear or blocked?"
     )
+    if hist:
+        base += f" Recent trend — {hist}."
+    base += recent_hint
+    return base
 
 
 def draft_message_with_bedrock(student: StudentRecord, flags: List[str]) -> str:
@@ -22,12 +35,25 @@ def draft_message_with_bedrock(student: StudentRecord, flags: List[str]) -> str:
 
     model_id = os.getenv("BEDROCK_MODEL_ID", "anthropic.claude-3-5-sonnet-20240620-v1:0")
     br = boto3.client("bedrock-runtime", region_name=os.getenv("AWS_REGION", "us-east-1"))
+    # Build concise history context
+    history = getattr(student, "metricsHistory", None) or {}
+    hist_lines: List[str] = []
+    for metric, pts in history.items():
+        if len(pts) >= 3:
+            hist_lines.append(f"- {metric}: {pts[-3]['value']} -> {pts[-2]['value']} -> {pts[-1]['value']}")
+    conv_lines: List[str] = []
+    for c in (getattr(student, "recentConversations", None) or [])[:3]:
+        msg = c.get("message") or ""
+        if msg:
+            conv_lines.append(f"- {c.get('timestampIso','')}: {msg}")
     prompt = (
         "You are an empathetic instructor. Draft a concise, supportive Slack DM (<= 3 sentences) "
         "to a learner based on the following context. Avoid shaming; be specific, offer help, and keep a warm tone.\n\n"
         f"Learner: {student.studentName}\n"
         f"Signals: {', '.join(flags)}\n"
-        f"Metrics: {student.metrics}\n"
+        f"Latest metrics: {student.metrics}\n"
+        f"3-week trends:\n" + ("\n".join(hist_lines) if hist_lines else "- None") + "\n"
+        f"Recent conversation snippets (most recent first):\n" + ("\n".join(conv_lines) if conv_lines else "- None") + "\n"
     )
     resp = br.converse(
         modelId=model_id,
