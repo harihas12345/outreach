@@ -26,53 +26,102 @@
     return null;
   }
 
+  async function waitForToField(timeoutMs = 8000) {
+    const start = Date.now();
+    while (Date.now() - start < timeoutMs) {
+      const el =
+        document.querySelector('input[aria-label^="To"], input[placeholder*="To"], [data-qa="dm-composer-recipient-input"] input') ||
+        document.querySelector('[role="combobox"] input');
+      if (el) return el;
+      await new Promise(r => setTimeout(r, 300));
+    }
+    return null;
+  }
+
+  async function openNewMessageUI() {
+    // Try top nav "New message" button
+    const selectors = [
+      'button[data-qa="top_nav_composer_button"]',
+      'button[aria-label="New message"]',
+      'button[aria-label^="New message"]',
+      'a[aria-label^="New message"]'
+    ];
+    for (const sel of selectors) {
+      const btn = document.querySelector(sel);
+      if (btn) {
+        btn.click();
+        await new Promise(r => setTimeout(r, 600));
+        return true;
+      }
+    }
+    return false;
+  }
+
+  function insertIntoInput(el, text) {
+    try {
+      el.focus();
+      const ok = document.execCommand('insertText', false, text);
+      if (ok) return true;
+    } catch {}
+    try {
+      el.focus();
+      el.value = text;
+      el.dispatchEvent(new InputEvent('input', { bubbles: true, data: text }));
+      return true;
+    } catch {}
+    return false;
+  }
+
+  function setCaretToEnd(el) {
+    try {
+      const range = document.createRange();
+      range.selectNodeContents(el);
+      range.collapse(false);
+      const sel = window.getSelection();
+      sel.removeAllRanges();
+      sel.addRange(range);
+    } catch {}
+  }
+
+  function insertIntoComposer(el, msg) {
+    try {
+      setCaretToEnd(el);
+      // Try execCommand path first
+      const ok = document.execCommand('insertText', false, msg);
+      if (ok) return true;
+    } catch {}
+    // Fallback: set textContent and dispatch input event so React sees the change
+    try {
+      el.focus();
+      el.textContent = msg;
+      el.dispatchEvent(new InputEvent('input', { bubbles: true, data: msg }));
+      return true;
+    } catch {}
+    return false;
+  }
+
   async function run() {
     const { user, msg } = readPayload();
     if (!msg) return; // nothing to do
 
-    // If a user ID is provided, try to navigate to the DM search quickly
-    // On user_profile page, click the "Message" button to open DM
-    try {
-      const btn = document.querySelector('button[aria-label^="Message"]') || document.querySelector('button:has(svg[aria-label="Message"])');
-      if (btn) {
-        btn.click();
-        await new Promise(r => setTimeout(r, 800));
-      }
-    } catch {}
-
-    // If we're on a channel page with an empty composer, attempt to focus DM by keyboard shortcut
-    // Ctrl/Cmd+K then type user ID (Slack resolves it) and Enter
+    // Open a new message composer and paste the Slack ID into the "To" field first
     try {
       if (user) {
-        const mod = navigator.platform.includes('Mac') ? 'metaKey' : 'ctrlKey';
-        const openQuickSwitcher = new KeyboardEvent('keydown', { key: 'k', [mod]: true, bubbles: true });
-        document.dispatchEvent(openQuickSwitcher);
-        await new Promise(r => setTimeout(r, 400));
-        const switcher = document.querySelector('input[placeholder*="Search"]') || document.querySelector('input[aria-label*="Search"]');
-        if (switcher) {
-          switcher.focus();
-          switcher.value = user;
-          switcher.dispatchEvent(new Event('input', { bubbles: true }));
-          await new Promise(r => setTimeout(r, 400));
-          const enter = new KeyboardEvent('keydown', { key: 'Enter', bubbles: true });
-          switcher.dispatchEvent(enter);
-          await new Promise(r => setTimeout(r, 800));
-        }
-      }
-    } catch {}
-
-    // If a "To" field is present (new message modal), populate it with user ID and confirm
-    try {
-      if (user) {
-        const toInput = document.querySelector('input[aria-label^="To"], [data-qa="dm-composer-recipient-input"] input');
+        await openNewMessageUI();
+        const toInput = await waitForToField();
         if (toInput) {
-          toInput.focus();
-          toInput.value = user;
-          toInput.dispatchEvent(new Event('input', { bubbles: true }));
+          insertIntoInput(toInput, user);
           await new Promise(r => setTimeout(r, 300));
           const enter = new KeyboardEvent('keydown', { key: 'Enter', bubbles: true });
           toInput.dispatchEvent(enter);
           await new Promise(r => setTimeout(r, 600));
+        } else {
+          // Fallback: try clicking the profile "Message" button if present
+          const btn = document.querySelector('button[aria-label^="Message"]') || document.querySelector('button:has(svg[aria-label="Message"])');
+          if (btn) {
+            btn.click();
+            await new Promise(r => setTimeout(r, 800));
+          }
         }
       }
     } catch {}
@@ -82,20 +131,12 @@
     // Insert text
     try {
       composer.focus();
-      // Use clipboard if available; fallback to direct insertion
-      if (navigator.clipboard && navigator.clipboard.readText) {
-        try {
-          const clip = await navigator.clipboard.readText();
-          if (!clip) await navigator.clipboard.writeText(msg);
-        } catch {}
+      const inserted = insertIntoComposer(composer, msg);
+      // Only auto-send if we successfully inserted the text
+      if (inserted && String(composer.textContent || '').includes(msg)) {
+        const sendEv = new KeyboardEvent('keydown', { key: 'Enter', bubbles: true });
+        composer.dispatchEvent(sendEv);
       }
-      // Direct insertion
-      const sel = window.getSelection();
-      if (sel && sel.rangeCount > 0) sel.deleteFromDocument();
-      document.execCommand('insertText', false, msg);
-      // Send (Enter)
-      const sendEv = new KeyboardEvent('keydown', { key: 'Enter', bubbles: true });
-      composer.dispatchEvent(sendEv);
     } catch {}
   }
 

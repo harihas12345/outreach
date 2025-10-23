@@ -14,6 +14,8 @@ const PRESIGN_URL = String((import.meta as any).env?.VITE_PRESIGN_URL || '')
 const BACKEND_URL = String((import.meta as any).env?.VITE_BACKEND_URL || '')
 const S3_PREFIX = String((import.meta as any).env?.VITE_S3_PREFIX || 'uploads')
 const SLACK_TEAM_ID = String((import.meta as any).env?.VITE_SLACK_TEAM_ID || 'T0HQD7V5M')
+const OPEN_SLACK_NATIVE = String((import.meta as any).env?.VITE_OPEN_SLACK_NATIVE || 'false').toLowerCase() === 'true'
+const OPEN_SLACK_IN_SAME_TAB = String((import.meta as any).env?.VITE_OPEN_SLACK_IN_SAME_TAB || 'false').toLowerCase() === 'true'
 const HAS_PRESIGN = !!PRESIGN_URL
 
 export default function App() {
@@ -133,12 +135,20 @@ export default function App() {
           const base = String(data?.webDmUrl || `https://app.slack.com/client/${SLACK_TEAM_ID}/user_profile/${encodeURIComponent(n.slackUserId)}`)
           const sep = base.includes('?') ? '&' : '?'
           const webUrl = `${base}${sep}aci_msg=${encodeURIComponent(String(data?.message || ''))}&aci_user=${encodeURIComponent(n.slackUserId)}`
-          window.open(webUrl, '_blank', 'noopener')
+          if (OPEN_SLACK_IN_SAME_TAB) {
+            window.location.href = webUrl
+          } else {
+            window.open(webUrl, '_blank', 'noopener')
+          }
         } catch {}
-        // Additionally open the native slack:// deep link if available (desktop app opens DM reliably)
+        // Optionally open the native slack:// deep link (controlled by env flag)
         try {
-          if (data?.deepLink) {
-            window.open(String(data.deepLink), '_blank', 'noopener')
+          if (OPEN_SLACK_NATIVE && data?.deepLink) {
+            if (OPEN_SLACK_IN_SAME_TAB) {
+              window.location.href = String(data.deepLink)
+            } else {
+              window.open(String(data.deepLink), '_blank', 'noopener')
+            }
           }
         } catch {}
         // Inform the user

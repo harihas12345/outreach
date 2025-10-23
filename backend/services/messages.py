@@ -78,6 +78,7 @@ def draft_message(student: StudentRecord, flags: List[str]) -> str:
     if agent_lambda:
         try:
             import boto3  # type: ignore
+            import json as _json  # local alias to avoid shadowing
             client = boto3.client("lambda", region_name=os.getenv("AWS_REGION", "us-east-1"))
             payload = {
                 "student": student.model_dump(),
@@ -86,10 +87,10 @@ def draft_message(student: StudentRecord, flags: List[str]) -> str:
             resp = client.invoke(
                 FunctionName=agent_lambda,
                 InvocationType="RequestResponse",
-                Payload=bytes(str({"body": payload}), "utf-8"),
+                # The Lambda expects event.body which may be a JSON string; send properly serialized JSON
+                Payload=_json.dumps({"body": _json.dumps(payload)}).encode("utf-8"),
             )
             raw = resp["Payload"].read().decode("utf-8")
-            import json as _json  # local alias to avoid shadowing
             body = _json.loads(raw).get("body")
             if isinstance(body, str):
                 body = _json.loads(body)
@@ -99,7 +100,8 @@ def draft_message(student: StudentRecord, flags: List[str]) -> str:
         except Exception:
             pass
 
-    use_bedrock = os.getenv("USE_BEDROCK", "false").lower() in {"1", "true", "yes"}
+    # Default to using Bedrock unless explicitly disabled
+    use_bedrock = os.getenv("USE_BEDROCK", "true").lower() in {"1", "true", "yes"}
     if use_bedrock:
         return draft_message_with_bedrock(student, flags)
     return draft_message_template(student, flags)

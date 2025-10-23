@@ -27,9 +27,9 @@ def _draft_with_bedrock(student: Dict[str, Any], flags: List[str]) -> str:
         f"Metrics: {student.get('metrics', {})}\n"
     )
     resp = br.converse(
-        modelId=model_id,
-        messages=[{"role": "user", "content": [{"text": prompt}]}],
-        inferenceConfig={"maxTokens": 300, "temperature": 0.3},
+      modelId=model_id,
+      messages=[{"role": "user", "content": [{"type": "text", "text": prompt}]}],
+      inferenceConfig={"maxTokens": 300, "temperature": 0.3},
     )
     try:
         return resp["output"]["message"]["content"][0]["text"]
