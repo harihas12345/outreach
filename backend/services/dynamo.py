@@ -1,7 +1,8 @@
 from __future__ import annotations
 
 import os
-from typing import Dict, List
+from typing import Dict, List, Any
+from decimal import Decimal
 
 
 _DDB_DEBUG = os.getenv("DDB_DEBUG", "").lower() in {"1", "true", "yes"}
@@ -69,7 +70,20 @@ def put_conversation_turn(turn: Dict) -> None:
     if not table:
         _dbg("Skip put_conversation_turn: table unavailable")
         return
-    item = {k: v for k, v in turn.items() if v is not None}
+
+    def _coerce_for_ddb(value: Any) -> Any:
+        if isinstance(value, float):
+            # Convert floats to Decimal for DynamoDB
+            return Decimal(str(value))
+        if isinstance(value, dict):
+            return {k: _coerce_for_ddb(v) for k, v in value.items()}
+        if isinstance(value, list):
+            return [_coerce_for_ddb(v) for v in value]
+        if isinstance(value, tuple):
+            return tuple(_coerce_for_ddb(v) for v in value)
+        return value
+
+    item = _coerce_for_ddb({k: v for k, v in turn.items() if v is not None})
     try:
         table.put_item(Item=item)  # type: ignore[attr-defined]
         _dbg(f"Put item ok for studentId={item.get('studentId')} ts={item.get('timestampIso')}")
