@@ -60,14 +60,19 @@ def ingest(req: IngestRequest) -> List[Notification]:
 def ingest_upload(file: UploadFile = File(...), messageAll: bool = Form(False)) -> List[Notification]:
     # Save uploaded file to a temp path and run ingest on it
     try:
-        import tempfile
         import shutil
-        suffix = ".xlsx"
-        with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as tmp:
-            with file.file as src:
-                shutil.copyfileobj(src, tmp)
-            tmp_path = tmp.name
-        return ingest_and_queue(tmp_path, message_all=bool(messageAll))
+        from pathlib import Path
+        # Persist uploads into the data/ directory using the original filename so history can accumulate across weeks
+        data_dir = Path("data")
+        data_dir.mkdir(parents=True, exist_ok=True)
+        target_name = file.filename or "upload.xlsx"
+        # Sanitize simple cases
+        target_name = target_name.replace("..", "_").replace("/", "_")
+        dest = data_dir / target_name
+        with file.file as src, open(dest, "wb") as dst:
+            shutil.copyfileobj(src, dst)
+        # Build notifications using the entire data directory to include prior weeks
+        return ingest_and_queue(str(data_dir), message_all=bool(messageAll))
     except Exception as e:
         raise HTTPException(status_code=400, detail=str(e))
 
