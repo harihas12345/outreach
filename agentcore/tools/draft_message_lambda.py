@@ -19,12 +19,37 @@ def _draft_with_bedrock(student: Dict[str, Any], flags: List[str]) -> str:
     model_id = os.getenv("BEDROCK_MODEL_ID", "us.anthropic.claude-sonnet-4-20250514-v1:0")
     region = os.getenv("AWS_REGION", "us-east-1")
     br = boto3.client("bedrock-runtime", region_name=region)
+    # Build concise 3-week history context if present
+    history: Dict[str, List[Dict[str, Any]]] = student.get("metricsHistory") or {}
+    hist_lines: List[str] = []
+    for metric, pts in history.items():
+        try:
+            if len(pts) >= 3:
+                v1 = pts[-3]["value"]
+                v2 = pts[-2]["value"]
+                v3 = pts[-1]["value"]
+                hist_lines.append(f"- {metric}: {v1} -> {v2} -> {v3}")
+        except Exception:
+            continue
+
+    # Include recent conversation snippets if provided (most recent first)
+    conv_lines: List[str] = []
+    for c in (student.get("recentConversations") or [])[:3]:
+        try:
+            msg = c.get("message") or ""
+            if msg:
+                conv_lines.append(f"- {c.get('timestampIso','')}: {msg}")
+        except Exception:
+            continue
+
     prompt = (
         "You are an empathetic instructor. Draft a concise, supportive Slack DM (<= 3 sentences) "
         "to a learner based on the following context. Avoid shaming; be specific, offer help, and keep a warm tone.\n\n"
         f"Learner: {student['studentName']}\n"
         f"Signals: {', '.join(flags)}\n"
-        f"Metrics: {student.get('metrics', {})}\n"
+        f"Latest metrics: {student.get('metrics', {})}\n"
+        "3-week trends:\n" + ("\n".join(hist_lines) if hist_lines else "- None") + "\n"
+        "Recent conversation snippets (most recent first):\n" + ("\n".join(conv_lines) if conv_lines else "- None") + "\n"
     )
     resp = br.converse(
       modelId=model_id,
