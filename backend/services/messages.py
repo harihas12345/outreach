@@ -61,11 +61,14 @@ def draft_message_with_bedrock(student: StudentRecord, flags: List[str]) -> str:
         f"3-week trends:\n" + ("\n".join(hist_lines) if hist_lines else "- None") + "\n"
         f"Recent conversation snippets (most recent first):\n" + ("\n".join(conv_lines) if conv_lines else "- None") + "\n"
     )
-    resp = br.converse(
-        modelId=model_id,
-        messages=[{"role": "user", "content": [{"type": "text", "text": prompt}]}],
-        inferenceConfig={"maxTokens": 300, "temperature": 0.3},
-    )
+    try:
+        resp = br.converse(
+            modelId=model_id,
+            messages=[{"role": "user", "content": [{"text": prompt}]}],
+            inferenceConfig={"maxTokens": 300, "temperature": 0.3},
+        )
+    except Exception:
+        return draft_message_template(student, flags)
     try:
         return resp["output"]["message"]["content"][0]["text"]
     except Exception:
