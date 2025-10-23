@@ -75,7 +75,16 @@ export default function App() {
         formData.append('file', file)
         formData.append('messageAll', String(messageAll))
         const resp = await fetch(`${BACKEND_URL.replace(/\/$/, '')}/ingest-upload`, { method: 'POST', body: formData })
-        if (!resp.ok) throw new Error('Upload ingest failed')
+        if (!resp.ok) {
+          let detail = ''
+          try {
+            const data = await resp.json()
+            detail = data?.detail || JSON.stringify(data)
+          } catch {
+            try { detail = await resp.text() } catch {}
+          }
+          throw new Error(`Upload ingest failed${detail ? `: ${detail}` : ''}`)
+        }
         setFile(null)
         setToast('File analyzed. Refreshing…')
         setTimeout(() => void refresh(), 1500)

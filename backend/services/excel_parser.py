@@ -14,6 +14,23 @@ REQUIRED_COLUMNS = {"student_id", "student_name", "slack_user_id"}
 def _normalize_columns(df: pd.DataFrame) -> pd.DataFrame:
     mapping = {c: c.strip().lower().replace(" ", "_") for c in df.columns}
     df = df.rename(columns=mapping)
+    # Apply common header aliases to canonical names expected by the pipeline
+    alias_to_canonical = {
+        "slack_id": "slack_user_id",
+        "slack_user": "slack_user_id",
+        "slack_userid": "slack_user_id",
+        "slackuserid": "slack_user_id",
+        "slack": "slack_user_id",
+        # Student identifiers (only remap if canonical missing)
+        "studentid": "student_id",
+        "id": "student_id",
+        "student": "student_name",
+        "studentname": "student_name",
+        "name": "student_name",
+    }
+    for alias, canonical in alias_to_canonical.items():
+        if alias in df.columns and canonical not in df.columns:
+            df = df.rename(columns={alias: canonical})
     return df
 
 
