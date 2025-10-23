@@ -67,7 +67,7 @@ def ingest_and_queue(data_path: str | None, message_all: bool = False) -> List[N
         # Draft message using LLM/template taking into account history
         msg = messages_svc.draft_message(rec, flags)
 
-        # Persist conversation turn for context next time
+        # Persist conversation turn for context next time (optional debug)
         try:
             turn = ConversationTurn(
                 studentId=rec.studentId,
@@ -77,8 +77,13 @@ def ingest_and_queue(data_path: str | None, message_all: bool = False) -> List[N
                 draftedMessage=msg,
             )
             dynamo.put_conversation_turn(turn.model_dump())
-        except Exception:
-            pass
+        except Exception as e:
+            # keep queueing even if history store fails
+            if os.getenv("DDB_DEBUG", "").lower() in {"1", "true", "yes"}:
+                try:
+                    print(f"[DDB] Orchestrator put turn failed: {e}")
+                except Exception:
+                    pass
 
         # Queue notification (dedup handled by API)
         note = storage.add_notification(
