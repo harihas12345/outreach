@@ -16,6 +16,7 @@ const S3_PREFIX = String((import.meta as any).env?.VITE_S3_PREFIX || 'uploads')
 const SLACK_TEAM_ID = String((import.meta as any).env?.VITE_SLACK_TEAM_ID || 'T0HQD7V5M')
 const OPEN_SLACK_NATIVE = String((import.meta as any).env?.VITE_OPEN_SLACK_NATIVE || 'false').toLowerCase() === 'true'
 const OPEN_SLACK_IN_SAME_TAB = String((import.meta as any).env?.VITE_OPEN_SLACK_IN_SAME_TAB || 'false').toLowerCase() === 'true'
+const SHOW_RUN_ANALYSIS = String((import.meta as any).env?.VITE_SHOW_RUN_ANALYSIS || 'false').toLowerCase() === 'true'
 const HAS_PRESIGN = !!PRESIGN_URL
 
 export default function App() {
@@ -147,7 +148,8 @@ export default function App() {
           if (OPEN_SLACK_IN_SAME_TAB) {
             window.location.href = webUrl
           } else {
-            window.open(webUrl, '_blank', 'noopener')
+            // Reuse the same named tab for Slack
+            window.open(webUrl, 'aci_slack_window')
           }
         } catch {}
         // Optionally open the native slack:// deep link (controlled by env flag)
@@ -222,9 +224,11 @@ export default function App() {
                   {uploading ? 'Uploading…' : 'Upload & analyze'}
                 </button>
                 <div className="spacer" />
-                <button className="btn btn-primary" onClick={onRunAnalysis} disabled={uploading}>
-                  {uploading ? 'Running…' : 'Run analysis'}
-                </button>
+                {SHOW_RUN_ANALYSIS && (
+                  <button className="btn btn-primary" onClick={onRunAnalysis} disabled={uploading}>
+                    {uploading ? 'Running…' : 'Run analysis'}
+                  </button>
+                )}
               </>
             )}
           </div>
