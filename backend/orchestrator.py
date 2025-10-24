@@ -19,25 +19,32 @@ def _last_n_weeks(per_week: Dict[str, List[StudentRecord]], n: int) -> Dict[str,
     return subset
 
 
-def _attach_history(latest_by_student: Dict[str, StudentRecord], per_week: Dict[str, List[StudentRecord]]) -> None:
-    # Build metrics history for last 3 weeks for each student
-    weeks = sorted(per_week.keys())[-3:]
-    # Map week -> studentId -> record
-    map_by_week: Dict[str, Dict[str, StudentRecord]] = {}
-    for w in weeks:
-        map_by_week[w] = {r.studentId: r for r in per_week.get(w, [])}
+def _attach_history(latest_by_student: Dict[str, StudentRecord]) -> None:
+    # Strict mode: build ALL historical context solely from DynamoDB, ignoring any Excel state
     for student_id, rec in latest_by_student.items():
-        history: Dict[str, List[Dict[str, float | str]]] = {}
-        for w in weeks:
-            r = map_by_week.get(w, {}).get(student_id)
-            if not r:
-                continue
-            for m, v in r.metrics.items():
-                history.setdefault(m, []).append({"week": w, "value": float(v)})
-        if history:
-            rec.metricsHistory = history
-        # Attach recent conversations from DynamoDB if available
-        rec.recentConversations = dynamo.get_recent_conversations(student_id)
+        turns = dynamo.get_recent_turns_with_context(student_id, limit=10)
+        # Build metrics history from stored context (ordered most-recent first)
+        metrics_history: Dict[str, List[Dict[str, float | str]]] = {}
+        for t in reversed(turns):  # oldest -> newest
+            ctx = t.get("context") or {}
+            for m, v in ctx.items():
+                try:
+                    metrics_history.setdefault(m, []).append({"week": str(t.get("week", "")), "value": float(v)})
+                except Exception:
+                    continue
+        if metrics_history:
+            rec.metricsHistory = metrics_history
+        # Recent conversations strictly from DynamoDB
+        rec.recentConversations = [
+            {
+                "timestampIso": t.get("timestampIso", ""),
+                "week": t.get("week", ""),
+                "flags": ",".join(t.get("flags", [])) if isinstance(t.get("flags"), list) else str(t.get("flags", "")),
+                "message": str(t.get("draftedMessage") or t.get("sentMessage") or ""),
+            }
+            for t in turns
+            if (t.get("draftedMessage") or t.get("sentMessage"))
+        ]
 
 
 def ingest_and_queue(data_path: str | None, message_all: bool = False) -> List[Notification]:
@@ -54,8 +61,8 @@ def ingest_and_queue(data_path: str | None, message_all: bool = False) -> List[N
     deltas_by_student = rules_svc.compute_deltas(per_week_3)
     trend_flags = rules_svc.decide_flags(latest_by_student, deltas_by_student)
 
-    # Attach metrics history and recent conversation context to records for message drafting
-    _attach_history(latest_by_student, per_week_3)
+    # Attach context strictly from DynamoDB (ignore Excel past values)
+    _attach_history(latest_by_student)
 
     queued: List[Notification] = []
     for student_id, rec in latest_by_student.items():

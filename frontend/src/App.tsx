@@ -148,8 +148,17 @@ export default function App() {
           if (OPEN_SLACK_IN_SAME_TAB) {
             window.location.href = webUrl
           } else {
-            // Reuse the same named tab for Slack
-            window.open(webUrl, 'aci_slack_window')
+            // Reuse a persistent window handle when possible to prevent new tabs
+            const anyWin: any = window as any
+            const existing: Window | null | undefined = anyWin.aciSlackWindow
+            if (existing && !existing.closed) {
+              try { existing.focus() } catch {}
+              try { existing.location.assign(webUrl) } catch {
+                try { existing.location.href = webUrl } catch {}
+              }
+            } else {
+              anyWin.aciSlackWindow = window.open(webUrl, 'aci_slack_window')
+            }
           }
         } catch {}
         // Optionally open the native slack:// deep link (controlled by env flag)

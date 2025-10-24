@@ -124,4 +124,37 @@ def get_recent_conversations(student_id: str, limit: int = 5) -> List[Dict]:
         return []
 
 
+def get_recent_turns_with_context(student_id: str, limit: int = 5) -> List[Dict[str, Any]]:
+    table = _get_table()
+    if not table:
+        _dbg("Skip get_recent_turns_with_context: table unavailable")
+        return []
+    try:
+        resp = table.query(  # type: ignore[attr-defined]
+            KeyConditionExpression="#s = :sid",
+            ExpressionAttributeNames={"#s": "studentId"},
+            ExpressionAttributeValues={":sid": student_id},
+            ScanIndexForward=False,
+            Limit=limit,
+        )
+        items = resp.get("Items", [])
+        out: List[Dict[str, Any]] = []
+        for it in items:
+            out.append(
+                {
+                    "timestampIso": str(it.get("timestampIso", "")),
+                    "week": str(it.get("week", "")),
+                    "flags": it.get("flags", []),
+                    "context": it.get("context", {}),
+                    "draftedMessage": it.get("draftedMessage", ""),
+                    "sentMessage": it.get("sentMessage", ""),
+                }
+            )
+        _dbg(f"Fetched {len(out)} turns+context for studentId={student_id}")
+        return out
+    except Exception as e:
+        _dbg(f"Query failed for studentId={student_id} (context): {e}")
+        return []
+
+
 
